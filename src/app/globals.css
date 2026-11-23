@@ -30,3 +30,14 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #334155;
 }
+
+@keyframes flow-dash {
+  to {
+    stroke-dashoffset: -24;
+  }
+}
+
+.animate-flow-dash {
+  stroke-dasharray: 6 6;
+  animation: flow-dash 1.1s linear infinite;
+}
