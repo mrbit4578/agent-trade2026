@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Activity,
   AlertOctagon,
@@ -122,28 +122,72 @@ export function LiveFlowView() {
   const [selectedNodeId, setSelectedNodeId] = useState<FlowNodeId>("collector");
   const [lastFetchedMs, setLastFetchedMs] = useState<number>(Date.now());
   const [staleSeconds, setStaleSeconds] = useState<number>(0);
+  const [simulateCrash, setSimulateCrash] = useState(false);
+
+  const mountedRef = useRef(true);
+  const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    try {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("flow_test_error") === "1") {
+        setSimulateCrash(true);
+      }
+    } catch {
+      // ignore URL errors
+    }
+    return () => {
+      mountedRef.current = false;
+      abortRef.current?.abort();
+    };
+  }, []);
+
+  if (simulateCrash) {
+    throw new Error("Simulated FlowErrorBoundary test error");
+  }
 
   const fetchFlow = useCallback(async (isManual = false) => {
-    if (isManual) setRefreshing(true);
-    setError(null);
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    if (isManual && mountedRef.current) setRefreshing(true);
+    if (mountedRef.current) setError(null);
     try {
-      const res = await fetch("/api/monitor/flow", { cache: "no-store" });
-      const data = await res.json();
-      if (!res.ok || !data.ok) {
+      const res = await fetch("/api/monitor/flow", {
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      const text = await res.text();
+      let data: Partial<FlowPayload> & { error?: string };
+      try {
+        data = JSON.parse(text) as Partial<FlowPayload> & { error?: string };
+      } catch {
+        throw new Error(`Phản hồi không hợp lệ từ /api/monitor/flow (HTTP ${res.status})`);
+      }
+      if (!res.ok || !data.ok || !data.banner || !Array.isArray(data.nodes)) {
         throw new Error(data.error || `HTTP ${res.status}`);
       }
+      if (!mountedRef.current) return;
       setFlow(data as FlowPayload);
       setLastFetchedMs(Date.now());
       setStaleSeconds(0);
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        return;
+      }
+      if (!mountedRef.current) return;
       setError(
         err instanceof Error
           ? err.message
           : "Không tải được dữ liệu dòng chảy live",
       );
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (mountedRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, []);
 
@@ -200,15 +244,18 @@ export function LiveFlowView() {
         </div>
       )}
 
-      {flow && (
+      {flow && (() => {
+        const bannerStyle = BANNER_STYLES[flow.banner?.level] ?? BANNER_STYLES.grey;
+        const nodes = Array.isArray(flow.nodes) ? flow.nodes : [];
+        return (
         <>
           {/* Overall Status Banner (§4) */}
           <section
-            className={`rounded-lg border p-4 ${BANNER_STYLES[flow.banner.level].wrap}`}
+            className={`rounded-lg border p-4 ${bannerStyle.wrap}`}
           >
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-start gap-3">
-                <div className={`mt-0.5 shrink-0 ${BANNER_STYLES[flow.banner.level].iconColor}`}>
+                <div className={`mt-0.5 shrink-0 ${bannerStyle.iconColor}`}>
                   {flow.banner.level === "green" && (
                     <CheckCircle2 className="h-5 w-5" />
                   )}
@@ -224,7 +271,7 @@ export function LiveFlowView() {
                 </div>
                 <div className="min-w-0">
                   <p
-                    className={`text-sm font-bold leading-snug ${BANNER_STYLES[flow.banner.level].title}`}
+                    className={`text-sm font-bold leading-snug ${bannerStyle.title}`}
                   >
                     {flow.banner.headline}
                   </p>
@@ -331,10 +378,10 @@ export function LiveFlowView() {
                     selected={selectedNode?.id === node.id}
                     onSelect={() => setSelectedNodeId(node.id)}
                   />
-                  {idx < flow.nodes.length - 1 && (
+                  {idx < nodes.length - 1 && (
                     <div className="flex justify-center py-1">
                       <ArrowDown
-                        className={`h-4 w-4 ${NODE_STYLES[node.status].arrow}`}
+                        className={`h-4 w-4 ${(NODE_STYLES[node.status] ?? NODE_STYLES.grey_no_data).arrow}`}
                       />
                     </div>
                   )}
@@ -356,7 +403,7 @@ export function LiveFlowView() {
                   </h3>
                 </div>
                 <span
-                  className={`rounded-full px-2.5 py-0.5 font-mono text-[10px] font-semibold ${NODE_STYLES[selectedNode.status].badge}`}
+                  className={`rounded-full px-2.5 py-0.5 font-mono text-[10px] font-semibold ${(NODE_STYLES[selectedNode.status] ?? NODE_STYLES.grey_no_data).badge}`}
                 >
                   {selectedNode.statusLabel}
                 </span>
@@ -428,7 +475,8 @@ export function LiveFlowView() {
             </span>
           </section>
         </>
-      )}
+        );
+      })()}
     </div>
   );
 }
@@ -442,7 +490,7 @@ function FlowNodeCard({
   selected: boolean;
   onSelect: () => void;
 }) {
-  const style = NODE_STYLES[node.status];
+  const style = NODE_STYLES[node.status] ?? NODE_STYLES.grey_no_data;
   return (
     <button
       type="button"
