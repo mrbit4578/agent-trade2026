@@ -35,9 +35,7 @@ jobs:
                 -H "Authorization: Bearer $MONITOR_SECRET"
               ;;
             *)
-              curl -fsS -X POST "$TARGET_URL/api/monitor/run" \
-                -H "Authorization: Bearer $MONITOR_SECRET" \
-                -H "Content-Type: application/json" \
-                -d '{"mode":"auto","windowHours":24,"sendTelegram":true}'
+              curl -fsS -X GET "$TARGET_URL/api/monitor/cron" \
+                -H "Authorization: Bearer $MONITOR_SECRET"
               ;;
           esac
