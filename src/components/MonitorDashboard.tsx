@@ -18,6 +18,7 @@ import {
   Terminal,
   XCircle,
 } from "lucide-react";
+import { FlowErrorBoundary } from "@/components/FlowErrorBoundary";
 import { LiveFlowView } from "@/components/LiveFlowView";
 import type {
   AuditItem,
@@ -169,6 +170,9 @@ export function MonitorDashboard() {
 
   const switchMainView = (next: "dashboard" | "flow") => {
     setMainView(next);
+    if (next === "dashboard") {
+      void loadStatus();
+    }
     try {
       const url = new URL(window.location.href);
       if (next === "flow") url.searchParams.set("view", "flow");
@@ -373,7 +377,9 @@ export function MonitorDashboard() {
         </nav>
 
         {mainView === "flow" ? (
-          <LiveFlowView />
+          <FlowErrorBoundary>
+            <LiveFlowView />
+          </FlowErrorBoundary>
         ) : (
           <>
         {error && (
@@ -997,7 +1003,7 @@ export function MonitorDashboard() {
                         <EnvRow
                           name="VPS_HEARTBEAT_URL"
                           ok={Boolean(envStatus?.vpsHeartbeatConfigured)}
-                          detail="Nguồn xác minh thứ 2 độc lập (telegram-sender sent_ids)"
+                          detail="Fallback tùy chọn (mặc định đã đọc Supabase station_heartbeat)"
                         />
                         <EnvRow
                           name="MONITOR_SECRET"
