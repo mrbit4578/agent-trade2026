@@ -10,6 +10,7 @@ export type FlowNodeId =
 
 export type FlowNodeStatus =
   | "green"
+  | "quiet"
   | "yellow"
   | "red"
   | "grey_no_data"
@@ -41,6 +42,7 @@ export interface FlowNodeState {
   ageMinutes: number | null;
   activityText: string;
   metrics: FlowMetric[];
+  infoNote?: string | null;
   errorOrHint: string | null;
   stuckMessage: string | null;
   possibleCause: string | null;
@@ -63,6 +65,31 @@ export interface MonitorAlertRow {
   telegram_message_id: string | null;
 }
 
+export interface CollectorHeartbeatInfo {
+  available: boolean;
+  updatedAtUtc: string | null;
+  banGhi: number | null;
+  source: string;
+  note: string;
+}
+
+export interface SenderHeartbeatInfo {
+  available: boolean;
+  updatedAtUtc: string | null;
+  lastRunAtUtc: string | null;
+  guiDuoc: number | null;
+  sentIdsCount: number | null;
+  failedCount: number | null;
+  source: string;
+  note: string;
+}
+
+export interface FlowStationHeartbeatInfo {
+  available: boolean;
+  updatedAtUtc: string | null;
+  note: string;
+}
+
 export interface FlowRawSnapshot {
   nowIso: string;
   mode: "live" | "demo";
@@ -72,10 +99,9 @@ export interface FlowRawSnapshot {
   recentAlerts: MonitorAlertRow[];
   receiptsAvailable: boolean;
   alertsAvailable: boolean;
-  heartbeatAvailable: boolean;
-  heartbeatLastRunAtUtc: string | null;
-  heartbeatSentCount: number | null;
-  heartbeatNote: string;
+  collectorHeartbeat: CollectorHeartbeatInfo;
+  senderHeartbeat: SenderHeartbeatInfo;
+  flowHeartbeat?: FlowStationHeartbeatInfo;
   recentRuns: Array<{
     runId: string;
     mode: "live" | "demo";
