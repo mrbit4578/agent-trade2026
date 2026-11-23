@@ -11,16 +11,20 @@ function assert(cond: boolean, msg: string) {
 async function buildBaseSnapshot(nowIso: string): Promise<FlowRawSnapshot> {
   const report = await runMonitorPipeline({
     mode: "demo",
-    scenario: "live-24h-sim",
+    scenario: "clean-day",
     sendTelegram: false,
   });
 
   const nowMs = new Date(nowIso).getTime();
   const minAgo = (m: number) => new Date(nowMs - m * 60000).toISOString();
 
-  // Make all 4 agent stages fresh (5 minutes ago)
   const freshReport = {
     ...report,
+    counts: {
+      ...report.counts,
+      rawSignalsScanned: 31,
+      matConfirmed: 0,
+    },
     stages: report.stages.map((s) => ({
       ...s,
       startedAtUtc: minAgo(5),
@@ -28,28 +32,60 @@ async function buildBaseSnapshot(nowIso: string): Promise<FlowRawSnapshot> {
     })),
   };
 
-  // Fresh signal 10 minutes ago
-  const freshSignals = report.items.map((i, idx) => ({
-    ...i.signal,
-    created_at: minAgo(10 + idx * 15),
-    ts_vao: minAgo(10 + idx * 15),
-  }));
-
   return {
     nowIso,
     mode: "live",
     report: freshReport,
-    recentSignals: freshSignals,
-    recentReceipts: report.items
-      .map((i) => i.receipt)
-      .filter((r): r is NonNullable<typeof r> => r !== null),
+    recentSignals: [
+      {
+        id: "DOGE-short-test-01",
+        coin: "DOGE",
+        side: "short",
+        loai: "that",
+        diem: 83,
+        gia_vao: 0.38,
+        sl: 0.4,
+        tp1: 0.34,
+        tp2: 0.31,
+        rr: 2.0,
+        phase: "alert_ready",
+        trang_thai: "open",
+        ket_qua: null,
+        ts_vao: minAgo(15),
+        ts_dong: null,
+        phien: "ASIA",
+        bias_4h: "bearish",
+        cau_truc: "BOS",
+        nguon: "collector-247",
+        created_at: minAgo(15),
+      },
+    ],
+    recentReceipts: [],
     recentAlerts: [],
     receiptsAvailable: true,
     alertsAvailable: true,
-    heartbeatAvailable: true,
-    heartbeatLastRunAtUtc: minAgo(3),
-    heartbeatSentCount: 3,
-    heartbeatNote: "Heartbeat OK",
+    collectorHeartbeat: {
+      available: true,
+      updatedAtUtc: minAgo(6),
+      banGhi: 31,
+      source: "Supabase station_heartbeat (collector-247)",
+      note: "Heartbeat collector-247 tươi",
+    },
+    senderHeartbeat: {
+      available: true,
+      updatedAtUtc: minAgo(4),
+      lastRunAtUtc: minAgo(4),
+      guiDuoc: 0,
+      sentIdsCount: 0,
+      failedCount: 0,
+      source: "Supabase station_heartbeat (telegram-sender)",
+      note: "Heartbeat telegram-sender từ Supabase station_heartbeat",
+    },
+    flowHeartbeat: {
+      available: true,
+      updatedAtUtc: minAgo(6),
+      note: "Heartbeat flow-247 tươi",
+    },
     recentRuns: [
       {
         runId: freshReport.runId,
@@ -57,12 +93,12 @@ async function buildBaseSnapshot(nowIso: string): Promise<FlowRawSnapshot> {
         capturedAtIso: minAgo(5),
         capturedAtVn: freshReport.capturedAtVn,
         triggerKind: "manual",
-        qualifiedExpected: freshReport.counts.qualifiedExpected,
-        du: freshReport.counts.du,
-        muon: freshReport.counts.muon,
-        matConfirmed: freshReport.counts.matConfirmed,
-        canKiemTra: freshReport.counts.canKiemTra,
-        canhBaoGia: freshReport.counts.canhBaoGia,
+        qualifiedExpected: 0,
+        du: 0,
+        muon: 0,
+        matConfirmed: 0,
+        canKiemTra: 0,
+        canhBaoGia: 0,
         telegramSent: false,
       },
     ],
@@ -70,116 +106,110 @@ async function buildBaseSnapshot(nowIso: string): Promise<FlowRawSnapshot> {
 }
 
 async function main() {
-  const nowIso = "2026-11-23T09:00:00.000Z"; // 16:00 VN
+  const nowIso = "2026-11-23T09:36:00.000Z"; // 16:36 VN
   const nowMs = new Date(nowIso).getTime();
   const minAgo = (m: number) => new Date(nowMs - m * 60000).toISOString();
 
-  console.log("=== Trade.2026 Live Signal Flow — Acceptance Tests ===");
+  console.log("=== Trade.2026 Live Flow (station_heartbeat fix) — 4 Acceptance Tests ===");
 
-  // TEST 1 (§8.1): 6 nút đúng thứ tự + banner tổng + thời gian cập nhật + số liệu khớp dashboard
+  // TEST 1 (§6.1): Trạm sống khỏe (collector ~6p, sender ~4p, gui_duoc=0, sent_ids=[])
   const base = await buildBaseSnapshot(nowIso);
-  const flowHealthy = evaluateLiveFlow(base);
-  const expectedOrder = [
-    "collector",
-    "soat",
-    "do",
-    "chot",
-    "dieu_phoi",
-    "telegram",
-  ];
-  assert(flowHealthy.nodes.length === 6, "Must have exactly 6 nodes");
+  const flowLiveOk = evaluateLiveFlow(base);
+  assert(flowLiveOk.nodes[0].status === "green", `Expected Node 1 green, got ${flowLiveOk.nodes[0].status}`);
+  assert(flowLiveOk.banner.level === "green", `Expected green banner, got ${flowLiveOk.banner.level}: ${flowLiveOk.banner.headline}`);
+  assert(flowLiveOk.nodes[5].status === "green", `Expected Node 6 green, got ${flowLiveOk.nodes[5].status}`);
   assert(
-    flowHealthy.nodes.map((n) => n.id).join(",") === expectedOrder.join(","),
-    "Nodes must be in exact order collector->soat->do->chot->dieu_phoi->telegram",
-  );
-  assert(
-    flowHealthy.banner.level === "green" &&
-      flowHealthy.banner.headline.includes("DÒNG CHẢY ĐANG SỐNG"),
-    `Expected green banner when all 6 nodes fresh, got: ${flowHealthy.banner.headline}`,
-  );
-  assert(
-    flowHealthy.nodes[1].metrics[1].value === base.report.counts.qualifiedExpected,
-    "Agent 1 Soát qualified count must match dashboard report",
+    flowLiveOk.nodes[5].infoNote === "đang chạy, không có gì để gửi",
+    `Expected idle sender note, got: ${flowLiveOk.nodes[5].infoNote}`,
   );
   console.log(
-    `[PASS] T1_SIX_NODES_AND_BANNER — 6 nút đúng thứ tự, banner="${flowHealthy.banner.headline}"`,
+    `[PASS] T1_LIVE_HEALTHY_AND_IDLE_SENDER — Node 1 GREEN (~6p), Banner GREEN, Node 6 GREEN ("${flowLiveOk.nodes[5].infoNote}")`,
   );
 
-  // TEST 2 (§8.2): Giả lập heartbeat cũ > 30 phút -> nút Telegram chuyển ĐỎ + banner báo đúng "ĐANG KẸT TẠI Đầu ra — Telegram từ HH:MM"
-  const staleHbSnap: FlowRawSnapshot = {
+  // TEST 2 (§6.2): Giả lập heartbeat collector cũ > 45 phút (55p) -> Node 1 ĐỎ + Banner "ĐANG KẸT TẠI Trạm VPS — Collector từ HH:MM"
+  const staleCollector: FlowRawSnapshot = {
     ...base,
-    heartbeatLastRunAtUtc: minAgo(42), // 15:18 VN
+    collectorHeartbeat: {
+      ...base.collectorHeartbeat,
+      updatedAtUtc: minAgo(55), // 15:41 VN
+    },
   };
-  const flowStaleHb = evaluateLiveFlow(staleHbSnap);
-  const tgNode = flowStaleHb.nodes[5];
-  assert(tgNode.status === "red", `Expected Node 6 red, got ${tgNode.status}`);
+  const flowStaleCol = evaluateLiveFlow(staleCollector);
+  assert(flowStaleCol.nodes[0].status === "red", `Expected Node 1 red, got ${flowStaleCol.nodes[0].status}`);
   assert(
-    Boolean(tgNode.stuckMessage?.includes("KẸT TẠI ĐÂY từ 15:18 (cách đây 42 phút)")),
-    `Expected stuckMessage with 15:18 & 42 phút, got: ${tgNode.stuckMessage}`,
+    Boolean(flowStaleCol.nodes[0].stuckMessage?.includes("KẸT TẠI ĐÂY từ 15:41 (cách đây 55 phút)")),
+    `Expected stuckMessage for 15:41 (55p), got: ${flowStaleCol.nodes[0].stuckMessage}`,
   );
   assert(
-    flowStaleHb.banner.level === "red" &&
-      flowStaleHb.banner.headline.includes("ĐANG KẸT TẠI Đầu ra — Telegram từ 15:18"),
-    `Expected red banner naming Đầu ra — Telegram từ 15:18, got: ${flowStaleHb.banner.headline}`,
+    flowStaleCol.banner.level === "red" &&
+      flowStaleCol.banner.headline.includes("ĐANG KẸT TẠI Trạm VPS — Collector từ 15:41"),
+    `Expected red banner for Trạm VPS — Collector từ 15:41, got: ${flowStaleCol.banner.headline}`,
   );
   console.log(
-    `[PASS] T2_STALE_HEARTBEAT_RED — Node 6 RED (${tgNode.stuckMessage}), banner="${flowStaleHb.banner.headline}"`,
+    `[PASS] T2_COLLECTOR_HEARTBEAT_OVERDUE — Node 1 RED (15:41, 55p), Banner="${flowStaleCol.banner.headline}"`,
   );
 
-  // TEST 3 (§8.3): Giả lập không có tín hiệu mới > 60 phút -> nút Trạm ĐỎ, các nút sau chuyển XÁM "chờ dữ liệu" (không xanh giả)
-  const staleSigSnap: FlowRawSnapshot = {
+  // TEST 3 (§6.3): Heartbeat collector tươi (~6p) nhưng không có kèo mới 10g36p -> Node 1 vàng nhạt "quiet" (thị trường yên ắng), KHÔNG đỏ, banner KHÔNG đỏ
+  const quietMarket: FlowRawSnapshot = {
     ...base,
-    recentSignals: base.recentSignals.map((s, idx) => ({
-      ...s,
-      created_at: minAgo(75 + idx * 10), // 14:45 VN
-      ts_vao: minAgo(75 + idx * 10),
-    })),
+    recentSignals: [
+      {
+        ...base.recentSignals[0],
+        created_at: minAgo(636), // 10h36m ago -> 06:00 VN
+        ts_vao: minAgo(636),
+      },
+    ],
   };
-  const flowStaleSig = evaluateLiveFlow(staleSigSnap);
+  const flowQuiet = evaluateLiveFlow(quietMarket);
   assert(
-    flowStaleSig.nodes[0].status === "red",
-    `Expected Node 1 red, got ${flowStaleSig.nodes[0].status}`,
+    flowQuiet.nodes[0].status === "quiet",
+    `Expected Node 1 quiet (not red!), got ${flowQuiet.nodes[0].status}`,
   );
   assert(
-    Boolean(
-      flowStaleSig.nodes[0].stuckMessage?.includes("KẸT TẠI ĐÂY từ 14:45 (cách đây 75 phút)"),
-    ),
-    `Expected Node 1 stuckMessage, got: ${flowStaleSig.nodes[0].stuckMessage}`,
+    flowQuiet.nodes[0].stuckMessage === null,
+    `Quiet market must NOT show KẸT TẠI ĐÂY, got: ${flowQuiet.nodes[0].stuckMessage}`,
   );
-  for (let i = 1; i <= 5; i++) {
-    const n = flowStaleSig.nodes[i];
-    assert(
-      n.status === "grey_waiting" && n.statusLabel === "CHỜ DỮ LIỆU",
-      `Expected downstream node ${n.name} to be grey_waiting (CHỜ DỮ LIỆU), got ${n.status} (${n.statusLabel})`,
-    );
-  }
+  assert(
+    Boolean(flowQuiet.nodes[0].infoNote?.includes("Thị trường yên ắng")),
+    `Expected quiet market note, got: ${flowQuiet.nodes[0].infoNote}`,
+  );
+  assert(
+    flowQuiet.banner.level === "green",
+    `Banner must NOT be red when market is quiet and heartbeats are fresh, got ${flowQuiet.banner.level}: ${flowQuiet.banner.headline}`,
+  );
   console.log(
-    `[PASS] T3_STALE_SIGNAL_CASCADE_WAITING — Node 1 RED (14:45, 75p), Nodes 2..6 all GREY (CHỜ DỮ LIỆU)`,
+    `[PASS] T3_QUIET_MARKET_10H_NOT_RED — Node 1="${flowQuiet.nodes[0].statusLabel}", infoNote="${flowQuiet.nodes[0].infoNote}", Banner=${flowQuiet.banner.level}`,
   );
 
-  // TEST 4 (§5): Heartbeat chưa cấu hình -> nút 6 PHẢI là XÁM CHƯA CÓ DỮ LIỆU, không tự xanh hoá
-  const noHbSnap: FlowRawSnapshot = {
+  // TEST 4 (§6.4): Heartbeat sender cũ > 30p -> Node 6 ĐỎ; khi có Supabase station_heartbeat (không cần VPS_HEARTBEAT_URL) -> Node 6 XANH
+  const staleSender: FlowRawSnapshot = {
     ...base,
-    heartbeatAvailable: false,
-    heartbeatLastRunAtUtc: null,
-    heartbeatSentCount: null,
-    heartbeatNote: "chưa có dữ liệu (chưa cấu hình VPS_HEARTBEAT_URL)",
+    senderHeartbeat: {
+      ...base.senderHeartbeat,
+      updatedAtUtc: minAgo(42), // 15:54 VN
+      lastRunAtUtc: minAgo(42),
+    },
   };
-  const flowNoHb = evaluateLiveFlow(noHbSnap);
+  const flowStaleSender = evaluateLiveFlow(staleSender);
   assert(
-    flowNoHb.nodes[5].status === "grey_no_data" &&
-      flowNoHb.nodes[5].statusLabel === "CHƯA CÓ DỮ LIỆU",
-    `Expected Node 6 grey_no_data when heartbeat unavailable, got ${flowNoHb.nodes[5].status}`,
+    flowStaleSender.nodes[5].status === "red",
+    `Expected Node 6 red when sender > 30m, got ${flowStaleSender.nodes[5].status}`,
   );
   assert(
-    flowNoHb.banner.level !== "green",
-    "Banner must NOT be green when heartbeat has no data",
+    flowStaleSender.banner.level === "red" &&
+      flowStaleSender.banner.headline.includes("ĐANG KẸT TẠI Đầu ra — Telegram từ 15:54"),
+    `Expected red banner for Đầu ra — Telegram từ 15:54, got: ${flowStaleSender.banner.headline}`,
+  );
+  assert(
+    flowLiveOk.nodes[5].status === "green" &&
+      flowLiveOk.nodes[5].statusLabel === "SỐNG",
+    "When Supabase station_heartbeat has fresh telegram-sender (without VPS_HEARTBEAT_URL), Node 6 must be GREEN",
   );
   console.log(
-    `[PASS] T4_HONEST_NO_DATA — Heartbeat missing → Node 6 GREY (CHƯA CÓ DỮ LIỆU), banner level=${flowNoHb.banner.level}`,
+    `[PASS] T4_SENDER_HEARTBEAT_RED_AND_SUPABASE_SOURCE — Stale sender (42p) -> Node 6 RED & Banner RED; fresh Supabase station_heartbeat -> Node 6 GREEN`,
   );
 
-  console.log("\nAll Live Flow acceptance tests PASSED.");
+  console.log("\nAll 4 station_heartbeat Live Flow acceptance tests PASSED.");
 }
 
 main().catch((err) => {

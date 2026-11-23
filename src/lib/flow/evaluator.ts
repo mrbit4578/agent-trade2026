@@ -7,14 +7,23 @@ import type {
   FlowRawSnapshot,
 } from "./types";
 
-const SIGNAL_GREEN_MAX_MIN = 30;
-const SIGNAL_YELLOW_MAX_MIN = 60;
+// Collector (15m cycle): green < 20m, yellow 20-45m, red > 45m
+const COLLECTOR_GREEN_MAX_MIN = 20;
+const COLLECTOR_YELLOW_MAX_MIN = 45;
 
-const HEARTBEAT_GREEN_MAX_MIN = 10;
-const HEARTBEAT_YELLOW_MAX_MIN = 30;
+// Quiet market informational threshold: latest signal > 6 hours (360m) while collector heartbeat is fresh
+const QUIET_MARKET_SIGNAL_AGE_MIN = 360;
 
+// Sender (5m cycle): green < 10m, yellow 10-30m, red > 30m
+const SENDER_GREEN_MAX_MIN = 10;
+const SENDER_YELLOW_MAX_MIN = 30;
+
+// Agent scan (15m cycle): green < 20m, yellow 20-45m, red > 45m
 const SCAN_GREEN_MAX_MIN = 20;
 const SCAN_YELLOW_MAX_MIN = 45;
+
+// flow-247 auxiliary station (15m cycle)
+const FLOW_STATION_RED_MIN = 45;
 
 function toVnDate(iso: string): Date {
   return new Date(new Date(iso).getTime() + 7 * 60 * 60 * 1000);
@@ -53,7 +62,17 @@ export function formatDateTimeVn(iso: string | null | undefined): string {
   return `${dd}/${mo} ${hh}:${mm} VN`;
 }
 
-function calcAgeMinutes(nowIso: string, targetIso: string | null | undefined): number | null {
+function formatDurationCompact(minutes: number): string {
+  if (minutes < 60) return `${minutes} phút`;
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return `${h}g${m > 0 ? `${String(m).padStart(2, "0")}p` : ""}`;
+}
+
+function calcAgeMinutes(
+  nowIso: string,
+  targetIso: string | null | undefined,
+): number | null {
   if (!targetIso) return null;
   const nowMs = new Date(nowIso).getTime();
   const targetMs = new Date(targetIso).getTime();
@@ -76,6 +95,8 @@ function statusLabelOf(status: FlowNodeStatus): string {
   switch (status) {
     case "green":
       return "SỐNG";
+    case "quiet":
+      return "SỐNG · YÊN ẮNG";
     case "yellow":
       return "CHẬM";
     case "red":
@@ -96,13 +117,12 @@ function buildActivityText(
   if (!hmVn || ageMin === null) return neverLabel;
   if (ageMin === 0) return `${hmVn} VN (vừa xong)`;
   if (ageMin < 60) return `${hmVn} VN (cách đây ${ageMin} phút)`;
-  const hours = Math.floor(ageMin / 60);
-  const mins = ageMin % 60;
-  return `${hmVn} VN (cách đây ${ageMin} phút · ${hours}g${mins > 0 ? `${mins}p` : ""})`;
+  return `${hmVn} VN (cách đây ${ageMin} phút · ${formatDurationCompact(ageMin)})`;
 }
 
 export function evaluateLiveFlow(snapshot: FlowRawSnapshot): FlowPayload {
-  const { nowIso, report } = snapshot;
+  const { nowIso, report, collectorHeartbeat, senderHeartbeat, flowHeartbeat } =
+    snapshot;
   const fetchedAtHmsVn = formatHmsVn(nowIso);
 
   const stageByCode = new Map(report.stages.map((s) => [s.agent, s]));
@@ -120,7 +140,9 @@ export function evaluateLiveFlow(snapshot: FlowRawSnapshot): FlowPayload {
   );
 
   const scheduleSummary = {
-    lastManualRunVn: lastManualRun ? formatDateTimeVn(lastManualRun.capturedAtIso) : null,
+    lastManualRunVn: lastManualRun
+      ? formatDateTimeVn(lastManualRun.capturedAtIso)
+      : null,
     lastScheduledRunVn: lastScheduledRun
       ? formatDateTimeVn(lastScheduledRun.capturedAtIso)
       : null,
@@ -130,7 +152,9 @@ export function evaluateLiveFlow(snapshot: FlowRawSnapshot): FlowPayload {
   };
 
   // ---------------------------------------------------------------------------
-  // NODE 1: Trạm VPS — Collector (Supabase signals)
+  // NODE 1: Trạm VPS — Collector
+  // Liveness = station_heartbeat (tram = 'collector-247', cap_nhat)
+  // Latest signal age = informational only (NEVER causes RED / stuck!)
   // ---------------------------------------------------------------------------
   const sortedSignals = [...snapshot.recentSignals].sort((a, b) => {
     const tA = new Date(a.created_at || a.ts_vao || 0).getTime();
@@ -144,50 +168,80 @@ export function evaluateLiveFlow(snapshot: FlowRawSnapshot): FlowPayload {
   const signalAgeMin = calcAgeMinutes(nowIso, latestSignalIso);
   const signalHmVn = formatHmVn(latestSignalIso);
 
+  const collectorIso = collectorHeartbeat.available
+    ? collectorHeartbeat.updatedAtUtc
+    : null;
+  const collectorAgeMin = calcAgeMinutes(nowIso, collectorIso);
+  const collectorHmVn = formatHmVn(collectorIso);
+
   let node1Status: FlowNodeStatus;
-  if (!report.sources.signals.available || !latestSignalIso) {
+  let isQuietMarket = false;
+
+  if (!collectorHeartbeat.available || !collectorIso) {
     node1Status = "grey_no_data";
   } else {
-    node1Status = classifyByThreshold(
-      signalAgeMin,
-      SIGNAL_GREEN_MAX_MIN,
-      SIGNAL_YELLOW_MAX_MIN,
+    const hbStatus = classifyByThreshold(
+      collectorAgeMin,
+      COLLECTOR_GREEN_MAX_MIN,
+      COLLECTOR_YELLOW_MAX_MIN,
     );
+    if (
+      hbStatus === "green" &&
+      signalAgeMin !== null &&
+      signalAgeMin > QUIET_MARKET_SIGNAL_AGE_MIN
+    ) {
+      node1Status = "quiet";
+      isQuietMarket = true;
+    } else {
+      node1Status = hbStatus;
+    }
   }
 
   const collectorStuck = node1Status === "red";
+  const latestSignalSummary = latestSignal
+    ? `Kèo mới nhất: ${latestSignal.coin}-${latestSignal.side} ${latestSignal.diem}đ lúc ${signalHmVn ?? "--:--"}${
+        signalAgeMin !== null ? ` (cách đây ${formatDurationCompact(signalAgeMin)})` : ""
+      }`
+    : "Chưa có kèo mới trong signals";
+
   const node1: FlowNodeState = {
     id: "collector",
     order: 1,
     name: "Trạm VPS — Collector",
-    shortRole: "Đẩy tín hiệu vào Supabase signals",
+    shortRole: "Heartbeat collector-247 (nhịp 15p) · đẩy kèo vào signals",
     status: node1Status,
     statusLabel: statusLabelOf(node1Status),
-    lastActivityAtUtc: latestSignalIso,
-    lastActivityHmVn: signalHmVn,
-    ageMinutes: signalAgeMin,
-    activityText: buildActivityText(signalHmVn, signalAgeMin, "chưa có tín hiệu"),
+    lastActivityAtUtc: collectorIso,
+    lastActivityHmVn: collectorHmVn,
+    ageMinutes: collectorAgeMin,
+    activityText: collectorHeartbeat.available
+      ? `Heartbeat: ${buildActivityText(collectorHmVn, collectorAgeMin)}`
+      : "Heartbeat collector-247: chưa có dữ liệu",
     metrics: [
       {
-        label: "Mới nhất",
+        label: "Bản ghi signals",
+        value:
+          collectorHeartbeat.banGhi !== null
+            ? `${collectorHeartbeat.banGhi} dòng`
+            : `${report.counts.rawSignalsScanned} dòng`,
+      },
+      {
+        label: "Kèo mới nhất",
         value: latestSignal
           ? `${latestSignal.coin}-${latestSignal.side} (${latestSignal.diem}đ)`
           : "CHƯA CÓ DỮ LIỆU",
       },
-      {
-        label: "Quét 24h",
-        value: `${report.counts.rawSignalsScanned} dòng`,
-      },
     ],
-    errorOrHint: !report.sources.signals.available
-      ? report.sources.signals.note
-      : null,
+    infoNote: isQuietMarket
+      ? `Thị trường yên ắng — không có kèo mới đạt ngưỡng · ${latestSignalSummary}`
+      : latestSignalSummary,
+    errorOrHint: !collectorHeartbeat.available ? collectorHeartbeat.note : null,
     stuckMessage:
-      collectorStuck && signalHmVn && signalAgeMin !== null
-        ? `KẸT TẠI ĐÂY từ ${signalHmVn} (cách đây ${signalAgeMin} phút)`
+      collectorStuck && collectorHmVn && collectorAgeMin !== null
+        ? `KẸT TẠI ĐÂY từ ${collectorHmVn} (cách đây ${collectorAgeMin} phút)`
         : null,
     possibleCause: collectorStuck
-      ? "trạm VPS ngừng đẩy tín hiệu hoặc chưa có kèo mới vào bảng signals > 60 phút"
+      ? "heartbeat collector-247 quá hạn > 45 phút — trạm VPS có thể ngừng chạy hoặc mất kết nối Supabase"
       : null,
     detailsTitle: "5 tín hiệu mới nhất trong Supabase signals",
     details: sortedSignals.slice(0, 5).map((s) => ({
@@ -201,7 +255,9 @@ export function evaluateLiveFlow(snapshot: FlowRawSnapshot): FlowPayload {
   };
 
   // Helper for agent nodes (Nodes 2..5)
-  const buildScanStatus = (finishedIso: string | null | undefined): {
+  const buildScanStatus = (
+    finishedIso: string | null | undefined,
+  ): {
     status: FlowNodeStatus;
     hmVn: string | null;
     ageMin: number | null;
@@ -217,7 +273,11 @@ export function evaluateLiveFlow(snapshot: FlowRawSnapshot): FlowPayload {
       return { status: "grey_no_data", hmVn: null, ageMin: null };
     }
     const ageMin = calcAgeMinutes(nowIso, finishedIso);
-    const status = classifyByThreshold(ageMin, SCAN_GREEN_MAX_MIN, SCAN_YELLOW_MAX_MIN);
+    const status = classifyByThreshold(
+      ageMin,
+      SCAN_GREEN_MAX_MIN,
+      SCAN_YELLOW_MAX_MIN,
+    );
     return { status, hmVn: formatHmVn(finishedIso), ageMin };
   };
 
@@ -251,13 +311,13 @@ export function evaluateLiveFlow(snapshot: FlowRawSnapshot): FlowPayload {
     lastActivityHmVn: soatEval.hmVn,
     ageMinutes: soatEval.ageMin,
     activityText: collectorStuck
-      ? "Chờ dữ liệu mới từ Trạm VPS"
+      ? "Chờ heartbeat collector-247 phục hồi"
       : buildActivityText(soatEval.hmVn, soatEval.ageMin),
     metrics: [
       { label: "Dòng quét", value: report.counts.rawSignalsScanned },
       { label: "Kỳ vọng (≥70đ)", value: report.counts.qualifiedExpected },
     ],
-    errorOrHint: collectorStuck ? "Chờ tín hiệu mới từ Trạm VPS" : null,
+    errorOrHint: collectorStuck ? "Chờ heartbeat từ Trạm VPS" : null,
     stuckMessage:
       soatEval.status === "red" && soatEval.hmVn && soatEval.ageMin !== null
         ? `KẸT TẠI ĐÂY từ ${soatEval.hmVn} (cách đây ${soatEval.ageMin} phút)`
@@ -286,7 +346,7 @@ export function evaluateLiveFlow(snapshot: FlowRawSnapshot): FlowPayload {
     lastActivityHmVn: doEval.hmVn,
     ageMinutes: doEval.ageMin,
     activityText: collectorStuck
-      ? "Chờ dữ liệu mới từ Trạm VPS"
+      ? "Chờ heartbeat collector-247 phục hồi"
       : buildActivityText(doEval.hmVn, doEval.ageMin),
     metrics: [
       {
@@ -298,7 +358,7 @@ export function evaluateLiveFlow(snapshot: FlowRawSnapshot): FlowPayload {
     errorOrHint: !snapshot.receiptsAvailable
       ? "Bảng delivery_receipts chưa sẵn sàng"
       : collectorStuck
-        ? "Chờ tín hiệu mới từ Trạm VPS"
+        ? "Chờ heartbeat từ Trạm VPS"
         : null,
     stuckMessage:
       doEval.status === "red" && doEval.hmVn && doEval.ageMin !== null
@@ -339,7 +399,7 @@ export function evaluateLiveFlow(snapshot: FlowRawSnapshot): FlowPayload {
     lastActivityHmVn: chotEval.hmVn,
     ageMinutes: chotEval.ageMin,
     activityText: collectorStuck
-      ? "Chờ dữ liệu mới từ Trạm VPS"
+      ? "Chờ heartbeat collector-247 phục hồi"
       : buildActivityText(chotEval.hmVn, chotEval.ageMin),
     metrics: [
       { label: "MẤT (2 nguồn)", value: report.counts.matConfirmed },
@@ -349,10 +409,10 @@ export function evaluateLiveFlow(snapshot: FlowRawSnapshot): FlowPayload {
       },
     ],
     errorOrHint:
-      !snapshot.heartbeatAvailable && !collectorStuck
-        ? "Thiếu nguồn thứ 2 (heartbeat) → ca thiếu chỉ dừng ở CẦN KIỂM TRA"
+      !senderHeartbeat.available && !collectorStuck
+        ? "Thiếu nguồn heartbeat sender → ca thiếu chỉ dừng ở CẦN KIỂM TRA"
         : collectorStuck
-          ? "Chờ tín hiệu mới từ Trạm VPS"
+          ? "Chờ heartbeat từ Trạm VPS"
           : null,
     stuckMessage:
       chotEval.status === "red" && chotEval.hmVn && chotEval.ageMin !== null
@@ -395,7 +455,7 @@ export function evaluateLiveFlow(snapshot: FlowRawSnapshot): FlowPayload {
     lastActivityHmVn: dpEval.hmVn,
     ageMinutes: dpEval.ageMin,
     activityText: collectorStuck
-      ? "Chờ dữ liệu mới từ Trạm VPS"
+      ? "Chờ heartbeat collector-247 phục hồi"
       : buildActivityText(dpEval.hmVn, dpEval.ageMin),
     metrics: [
       { label: "Cảnh báo đã gửi", value: snapshot.recentAlerts.length },
@@ -404,7 +464,7 @@ export function evaluateLiveFlow(snapshot: FlowRawSnapshot): FlowPayload {
     errorOrHint: report.telegram.error
       ? report.telegram.error
       : collectorStuck
-        ? "Chờ tín hiệu mới từ Trạm VPS"
+        ? "Chờ heartbeat từ Trạm VPS"
         : null,
     stuckMessage:
       dpEval.status === "red" && dpEval.hmVn && dpEval.ageMin !== null
@@ -431,7 +491,7 @@ export function evaluateLiveFlow(snapshot: FlowRawSnapshot): FlowPayload {
   };
 
   // ---------------------------------------------------------------------------
-  // NODE 6: Đầu ra — Telegram (@trademrbit_bot + delivery_receipts + heartbeat)
+  // NODE 6: Đầu ra — Telegram (@trademrbit_bot + station_heartbeat telegram-sender)
   // ---------------------------------------------------------------------------
   const sortedReceipts = [...snapshot.recentReceipts].sort((a, b) => {
     const tA = new Date(a.sent_at || a.checked_at || 0).getTime();
@@ -443,77 +503,92 @@ export function evaluateLiveFlow(snapshot: FlowRawSnapshot): FlowPayload {
     ? latestReceipt.sent_at || latestReceipt.checked_at
     : null;
 
-  const hbIso = snapshot.heartbeatLastRunAtUtc;
-  const hbAgeMin = calcAgeMinutes(nowIso, hbIso);
-  const hbHmVn = formatHmVn(hbIso);
+  const senderIso = senderHeartbeat.available
+    ? senderHeartbeat.updatedAtUtc || senderHeartbeat.lastRunAtUtc
+    : null;
+  const senderAgeMin = calcAgeMinutes(nowIso, senderIso);
+  const senderHmVn = formatHmVn(senderIso);
 
   let node6Status: FlowNodeStatus;
-  if (collectorStuck && !snapshot.heartbeatAvailable) {
+  if (collectorStuck) {
     node6Status = "grey_waiting";
-  } else if (!snapshot.heartbeatAvailable) {
-    // §4 & §5: Heartbeat sender chưa có dữ liệu -> PHẢI hiện CHƯA CÓ DỮ LIỆU (xám), không tự xanh hoá!
+  } else if (!senderHeartbeat.available || !senderIso) {
     node6Status = "grey_no_data";
-  } else if (collectorStuck) {
-    // §8.3: Nếu Trạm VPS kẹt > 60p, các nút sau chuyển XÁM "chờ dữ liệu"
-    node6Status = "grey_waiting";
   } else {
     node6Status = classifyByThreshold(
-      hbAgeMin,
-      HEARTBEAT_GREEN_MAX_MIN,
-      HEARTBEAT_YELLOW_MAX_MIN,
+      senderAgeMin,
+      SENDER_GREEN_MAX_MIN,
+      SENDER_YELLOW_MAX_MIN,
     );
   }
 
   const matchedReceiptsCount = report.items.filter(
-    (i) => i.receipt && (i.receipt.status === "sent" || i.receipt.status === "duplicate"),
+    (i) =>
+      i.receipt &&
+      (i.receipt.status === "sent" || i.receipt.status === "duplicate"),
   ).length;
+
+  const isSenderIdleHealthy =
+    senderHeartbeat.available &&
+    node6Status !== "red" &&
+    (senderHeartbeat.guiDuoc ?? 0) === 0 &&
+    (senderHeartbeat.sentIdsCount ?? 0) === 0;
+
+  const senderMetricValue = senderHeartbeat.available
+    ? `${senderHeartbeat.guiDuoc ?? senderHeartbeat.sentIdsCount ?? 0} tin${
+        senderHeartbeat.failedCount ? ` · ${senderHeartbeat.failedCount} lỗi` : ""
+      }`
+    : "CHƯA CÓ DỮ LIỆU";
 
   const node6: FlowNodeState = {
     id: "telegram",
     order: 6,
     name: "Đầu ra — Telegram",
-    shortRole: "@trademrbit_bot · delivery_receipts · heartbeat",
+    shortRole: "@trademrbit_bot · station_heartbeat (5p) · delivery_receipts",
     status: node6Status,
     statusLabel: statusLabelOf(node6Status),
-    lastActivityAtUtc: hbIso || latestReceiptIso,
-    lastActivityHmVn: hbHmVn || formatHmVn(latestReceiptIso),
-    ageMinutes: hbIso ? hbAgeMin : calcAgeMinutes(nowIso, latestReceiptIso),
+    lastActivityAtUtc: senderIso || latestReceiptIso,
+    lastActivityHmVn: senderHmVn || formatHmVn(latestReceiptIso),
+    ageMinutes: senderIso ? senderAgeMin : calcAgeMinutes(nowIso, latestReceiptIso),
     activityText:
       node6Status === "grey_waiting"
-        ? "Chờ dữ liệu mới từ Trạm VPS"
-        : !snapshot.heartbeatAvailable
+        ? "Chờ heartbeat collector-247 phục hồi"
+        : !senderHeartbeat.available
           ? latestReceiptIso
             ? `Receipt cuối: ${formatDateTimeVn(latestReceiptIso)} · Heartbeat: chưa có dữ liệu`
             : "chưa có dữ liệu heartbeat / receipt"
-          : buildActivityText(hbHmVn, hbAgeMin, "chưa từng chạy"),
+          : `Sender: ${buildActivityText(senderHmVn, senderAgeMin, "chưa từng chạy")}`,
     metrics: [
+      {
+        label: "Sender đã gửi",
+        value: senderMetricValue,
+      },
       {
         label: "Receipts khớp",
         value: snapshot.receiptsAvailable
           ? `${matchedReceiptsCount} / ${report.counts.qualifiedExpected}`
           : "CHƯA CÓ DỮ LIỆU",
       },
-      {
-        label: "Heartbeat sender",
-        value: snapshot.heartbeatAvailable
-          ? `${snapshot.heartbeatSentCount ?? 0} sent_ids`
-          : "CHƯA CÓ DỮ LIỆU",
-      },
     ],
-    errorOrHint: !snapshot.heartbeatAvailable
-      ? "Chưa cấu hình VPS_HEARTBEAT_URL / bản vá sender trên VPS"
+    infoNote: isSenderIdleHealthy
+      ? "đang chạy, không có gì để gửi"
+      : senderHeartbeat.available
+        ? `Nguồn heartbeat: ${senderHeartbeat.source}`
+        : null,
+    errorOrHint: !senderHeartbeat.available
+      ? senderHeartbeat.note
       : node6Status === "grey_waiting"
-        ? "Chờ tín hiệu mới từ Trạm VPS"
+        ? "Chờ heartbeat từ Trạm VPS"
         : null,
     stuckMessage:
-      node6Status === "red" && hbHmVn && hbAgeMin !== null
-        ? `KẸT TẠI ĐÂY từ ${hbHmVn} (cách đây ${hbAgeMin} phút)`
+      node6Status === "red" && senderHmVn && senderAgeMin !== null
+        ? `KẸT TẠI ĐÂY từ ${senderHmVn} (cách đây ${senderAgeMin} phút)`
         : null,
     possibleCause:
       node6Status === "red"
-        ? "telegram-sender trên VPS ngừng nhịp > 30 phút hoặc mất kết nối relay/Telegram"
+        ? "heartbeat telegram-sender quá hạn > 30 phút — sender trên VPS có thể ngừng chạy hoặc mất kết nối"
         : null,
-    detailsTitle: "5 biên nhận mới nhất (delivery_receipts)",
+    detailsTitle: "5 biên nhận mới nhất (delivery_receipts) & trạng thái sender",
     details:
       sortedReceipts.length > 0
         ? sortedReceipts.slice(0, 5).map((r) => ({
@@ -531,12 +606,16 @@ export function evaluateLiveFlow(snapshot: FlowRawSnapshot): FlowPayload {
           }))
         : [
             {
-              id: "no-receipts",
-              title: "Chưa có biên nhận trong bảng delivery_receipts",
-              subtitle: snapshot.heartbeatNote,
-              timestampVn: formatDateTimeVn(nowIso),
-              badge: "CHƯA CÓ DỮ LIỆU",
-              badgeTone: "slate",
+              id: "sender-hb-status",
+              title: senderHeartbeat.available
+                ? isSenderIdleHealthy
+                  ? "telegram-sender đang chạy, không có gì để gửi"
+                  : `telegram-sender đã gửi ${senderHeartbeat.guiDuoc ?? 0} tin`
+                : "Chưa có dữ liệu heartbeat telegram-sender",
+              subtitle: senderHeartbeat.note,
+              timestampVn: formatDateTimeVn(senderIso || nowIso),
+              badge: senderHeartbeat.available ? "HEARTBEAT OK" : "CHƯA CÓ DỮ LIỆU",
+              badgeTone: senderHeartbeat.available ? "emerald" : "slate",
             },
           ],
   };
@@ -544,10 +623,21 @@ export function evaluateLiveFlow(snapshot: FlowRawSnapshot): FlowPayload {
   const nodes: FlowNodeState[] = [node1, node2, node3, node4, node5, node6];
 
   // ---------------------------------------------------------------------------
-  // OVERALL BANNER (§4)
+  // OVERALL BANNER (§3 & §4)
+  // Chỉ ĐỎ khi: heartbeat quá hạn (collector/sender/flow) HOẶC có ca MẤT đã chốt
+  // KHÔNG đỏ chỉ vì thị trường yên ắng (không có kèo mới)!
   // ---------------------------------------------------------------------------
   const firstRed = nodes.find((n) => n.status === "red");
-  const allGreen = nodes.every((n) => n.status === "green");
+  const flowStationAgeMin = flowHeartbeat?.available
+    ? calcAgeMinutes(nowIso, flowHeartbeat.updatedAtUtc)
+    : null;
+  const flowStationOverdue =
+    flowStationAgeMin !== null && flowStationAgeMin > FLOW_STATION_RED_MIN;
+  const hasConfirmedMissing = report.counts.matConfirmed > 0;
+
+  const allHealthyOrQuiet = nodes.every(
+    (n) => n.status === "green" || n.status === "quiet",
+  );
   const firstYellow = nodes.find((n) => n.status === "yellow");
   const greyNodes = nodes.filter(
     (n) => n.status === "grey_no_data" || n.status === "grey_waiting",
@@ -558,15 +648,32 @@ export function evaluateLiveFlow(snapshot: FlowRawSnapshot): FlowPayload {
     const since = firstRed.lastActivityHmVn ?? "--:--";
     banner = {
       level: "red",
-      headline: `ĐANG KẸT TẠI ${firstRed.name} từ ${since} — nguyên nhân có thể: ${firstRed.possibleCause ?? "dữ liệu quá ngưỡng đỏ"}`,
+      headline: `ĐANG KẸT TẠI ${firstRed.name} từ ${since} — nguyên nhân có thể: ${firstRed.possibleCause ?? "heartbeat quá ngưỡng đỏ"}`,
       subline: `Cập nhật lần cuối ${fetchedAtHmsVn} VN · ${scheduleSummary.note}`,
       stuckNodeId: firstRed.id,
     };
-  } else if (allGreen) {
+  } else if (flowStationOverdue && flowHeartbeat?.updatedAtUtc) {
+    const since = formatHmVn(flowHeartbeat.updatedAtUtc) ?? "--:--";
+    banner = {
+      level: "red",
+      headline: `ĐANG KẸT TẠI Trạm flow-247 từ ${since} — nguyên nhân có thể: heartbeat flow-247 quá hạn ${flowStationAgeMin} phút (> 45 phút)`,
+      subline: `Cập nhật lần cuối ${fetchedAtHmsVn} VN · ${scheduleSummary.note}`,
+      stuckNodeId: "collector",
+    };
+  } else if (hasConfirmedMissing) {
+    banner = {
+      level: "red",
+      headline: `PHÁT HIỆN ${report.counts.matConfirmed} CA MẤT ĐÃ CHỐT (2 nguồn) — cập nhật lần cuối ${fetchedAtHmsVn}`,
+      subline: `Trạm đang sống nhưng có tín hiệu đạt ngưỡng không tới Telegram · ${scheduleSummary.note}`,
+      stuckNodeId: "chot",
+    };
+  } else if (allHealthyOrQuiet) {
     banner = {
       level: "green",
       headline: `DÒNG CHẢY ĐANG SỐNG — cập nhật lần cuối ${fetchedAtHmsVn}`,
-      subline: `Toàn bộ 6/6 khâu trong ngưỡng xanh · ${scheduleSummary.note}`,
+      subline: isQuietMarket
+        ? `Heartbeat trạm tươi · Thị trường yên ắng (chưa có kèo mới > 6 giờ) · ${scheduleSummary.note}`
+        : `Toàn bộ 6/6 khâu trong ngưỡng xanh · ${scheduleSummary.note}`,
       stuckNodeId: null,
     };
   } else if (firstYellow) {

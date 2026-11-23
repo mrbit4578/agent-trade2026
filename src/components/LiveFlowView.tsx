@@ -42,6 +42,14 @@ const NODE_STYLES: Record<
     arrow: "text-emerald-400",
     icon: "green",
   },
+  quiet: {
+    card: "border-amber-400/35 bg-amber-950/10 hover:border-amber-300/60",
+    badge:
+      "bg-amber-400/15 text-amber-200 border border-amber-400/35",
+    dot: "bg-emerald-400 animate-pulse",
+    arrow: "text-emerald-400",
+    icon: "green",
+  },
   yellow: {
     card: "border-amber-500/45 bg-amber-950/15 hover:border-amber-400/75",
     badge: "bg-amber-500/15 text-amber-300 border border-amber-500/40",
@@ -399,15 +407,15 @@ export function LiveFlowView() {
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-mono">
               <span className="inline-flex items-center gap-1.5">
                 <span className="h-2 w-2 rounded-full bg-emerald-400" />
-                Xanh: Tín hiệu &lt;30p · Quét &lt;20p · Heartbeat &lt;10p
+                Xanh: Collector &lt;20p · Quét &lt;20p · Sender &lt;10p
               </span>
               <span className="inline-flex items-center gap-1.5">
                 <span className="h-2 w-2 rounded-full bg-amber-400" />
-                Vàng: 30–60p · 20–45p · 10–30p
+                Vàng: 20–45p · 20–45p · 10–30p (hoặc yên ắng &gt;6g)
               </span>
               <span className="inline-flex items-center gap-1.5">
                 <span className="h-2 w-2 rounded-full bg-rose-500" />
-                Đỏ: &gt;60p · &gt;45p · &gt;30p
+                Đỏ: &gt;45p · &gt;45p · &gt;30p
               </span>
               <span className="inline-flex items-center gap-1.5">
                 <span className="h-2 w-2 rounded-full bg-slate-500" />
@@ -497,8 +505,17 @@ function FlowNodeCard({
         </div>
       </div>
 
-      {/* Footer hint / run kind */}
-      <div className="mt-2.5 border-t border-slate-800/70 pt-2">
+      {/* Footer hint / infoNote / run kind */}
+      <div className="mt-2.5 border-t border-slate-800/70 pt-2 space-y-1">
+        {node.infoNote && (
+          <p
+            className={`text-[11px] leading-snug ${
+              node.status === "quiet" ? "text-amber-200/90" : "text-cyan-200/85"
+            }`}
+          >
+            {node.infoNote}
+          </p>
+        )}
         {node.errorOrHint ? (
           <p className="text-[11px] leading-snug text-amber-300/90">
             {node.errorOrHint}
@@ -507,25 +524,25 @@ function FlowNodeCard({
           <p className="text-[11px] leading-snug text-slate-400">
             {node.runKindNote}
           </p>
-        ) : (
+        ) : !node.infoNote ? (
           <p className="text-[11px] leading-snug text-slate-500">
             {node.shortRole} · Bấm xem 5 dòng gần nhất
           </p>
-        )}
+        ) : null}
       </div>
     </button>
   );
 }
 
 function FlowConnectorHorizontal({ status }: { status: FlowNodeStatus }) {
-  const strokeColor =
-    status === "green"
-      ? "#34d399"
-      : status === "yellow"
-        ? "#fbbf24"
-        : status === "red"
-          ? "#fb7185"
-          : "#475569";
+  const isFlowing = status === "green" || status === "quiet";
+  const strokeColor = isFlowing
+    ? "#34d399"
+    : status === "yellow"
+      ? "#fbbf24"
+      : status === "red"
+        ? "#fb7185"
+        : "#475569";
 
   return (
     <div
@@ -541,8 +558,8 @@ function FlowConnectorHorizontal({ status }: { status: FlowNodeStatus }) {
             y2="7"
             stroke={strokeColor}
             strokeWidth="2"
-            className={status === "green" ? "animate-flow-dash" : ""}
-            strokeDasharray={status === "green" ? undefined : "4 4"}
+            className={isFlowing ? "animate-flow-dash" : ""}
+            strokeDasharray={isFlowing ? undefined : "4 4"}
           />
         </svg>
         <ArrowRight className="-ml-1.5 h-4 w-4" style={{ color: strokeColor }} />
