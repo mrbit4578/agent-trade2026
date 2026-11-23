@@ -8,7 +8,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test:acceptance": "npx --yes tsx scripts/acceptance-test.ts"
+    "test:acceptance": "npx --yes tsx scripts/acceptance-test.ts",
+    "test:flow": "npx --yes tsx scripts/flow-acceptance-test.ts"
   },
   "dependencies": {
     "lucide-react": "^0.511.0",

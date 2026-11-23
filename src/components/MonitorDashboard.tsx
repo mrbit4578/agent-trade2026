@@ -8,6 +8,8 @@ import {
   Clock,
   Copy,
   Database,
+  GitBranch,
+  LayoutDashboard,
   Play,
   Radio,
   RefreshCw,
@@ -16,6 +18,7 @@ import {
   Terminal,
   XCircle,
 } from "lucide-react";
+import { LiveFlowView } from "@/components/LiveFlowView";
 import type {
   AuditItem,
   DemoScenarioId,
@@ -128,6 +131,7 @@ export function MonitorDashboard() {
   const [activeTab, setActiveTab] = useState<
     "audit" | "telegram" | "acceptance" | "setup"
   >("audit");
+  const [mainView, setMainView] = useState<"dashboard" | "flow">("dashboard");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   const loadStatus = useCallback(async () => {
@@ -153,11 +157,27 @@ export function MonitorDashboard() {
     try {
       const saved = sessionStorage.getItem("trade2026_monitor_secret");
       if (saved) setMonitorSecret(saved);
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("view") === "flow") {
+        setMainView("flow");
+      }
     } catch {
       // ignore storage errors
     }
     void loadStatus();
   }, [loadStatus]);
+
+  const switchMainView = (next: "dashboard" | "flow") => {
+    setMainView(next);
+    try {
+      const url = new URL(window.location.href);
+      if (next === "flow") url.searchParams.set("view", "flow");
+      else url.searchParams.delete("view");
+      window.history.replaceState({}, "", url.toString());
+    } catch {
+      // ignore history errors
+    }
+  };
 
   const handleSecretChange = (val: string) => {
     setMonitorSecret(val);
@@ -320,6 +340,42 @@ export function MonitorDashboard() {
       </header>
 
       <main className="mx-auto max-w-[1440px] space-y-4 px-4 py-4">
+        {/* Top-level View Switcher: Dashboard vs Dòng chảy live */}
+        <nav
+          aria-label="Chọn màn hình giám sát"
+          className="flex flex-wrap items-center gap-2 border-b border-slate-800/80 pb-3"
+        >
+          <button
+            type="button"
+            onClick={() => switchMainView("dashboard")}
+            className={`inline-flex items-center gap-2 rounded-md px-3.5 py-2 text-xs font-semibold transition ${
+              mainView === "dashboard"
+                ? "border border-cyan-500/40 bg-cyan-500/15 text-cyan-200"
+                : "border border-slate-800 bg-[#0b1120] text-slate-400 hover:border-slate-700 hover:text-slate-200"
+            }`}
+          >
+            <LayoutDashboard className="h-3.5 w-3.5" />
+            Dashboard giám sát
+          </button>
+          <button
+            type="button"
+            onClick={() => switchMainView("flow")}
+            className={`inline-flex items-center gap-2 rounded-md px-3.5 py-2 text-xs font-semibold transition ${
+              mainView === "flow"
+                ? "border border-cyan-500/40 bg-cyan-500/15 text-cyan-200"
+                : "border border-slate-800 bg-[#0b1120] text-slate-400 hover:border-slate-700 hover:text-slate-200"
+            }`}
+          >
+            <GitBranch className="h-3.5 w-3.5" />
+            Dòng chảy live
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+          </button>
+        </nav>
+
+        {mainView === "flow" ? (
+          <LiveFlowView />
+        ) : (
+          <>
         {error && (
           <div className="flex items-center justify-between rounded-lg border border-rose-500/40 bg-rose-950/30 px-4 py-2.5 text-xs text-rose-200">
             <div className="flex items-center gap-2">
@@ -1041,6 +1097,8 @@ export function MonitorDashboard() {
               </section>
             </>
           )
+        )}
+          </>
         )}
       </main>
     </div>
