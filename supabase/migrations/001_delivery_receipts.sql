@@ -1,6 +1,7 @@
 -- ============================================================================
 -- P0 Migration: Durable Delivery Receipts & Alert Dedupe for Trade.2026
--- Target: Supabase project supabase-almond-fence (ref: fagveiomuwuyuzzeepvk)
+-- CHỈ CHẠY TRONG PROJECT: supabase-almond-fence (ref: fagveiomuwuyuzzeepvk)
+-- KHÔNG chạy vào citrine-candle!
 -- ============================================================================
 
 -- 1. Bảng biên nhận bền vững (ghi bởi tools/telegram-sender.js trên VPS)
@@ -29,9 +30,18 @@ create table if not exists public.monitor_alerts (
   evidence jsonb
 );
 
--- Bật RLS nếu dự án đang dùng anon key chỉ đọc trên bảng signals
--- (điều chỉnh policy theo role thực tế của supabase-almond-fence)
+-- 3. BẬT ROW LEVEL SECURITY (RLS) — KHÔNG TẠO POLICY PUBLIC NÀO
+-- Anon key sẽ không đọc/ghi được 2 bảng này.
+-- Monitor & VPS sender dùng service key (sb_secret_..., gửi qua header apikey) nên bypass RLS.
+alter table public.delivery_receipts enable row level security;
+alter table public.monitor_alerts enable row level security;
+
 comment on table public.delivery_receipts is
-  'Biên nhận gửi tín hiệu bền vững cho Trade.2026 (P0 audit 21/11/2026).';
+  'Biên nhận gửi tín hiệu bền vững cho Trade.2026 (P0 audit 21/11/2026, RLS enabled, service_role only).';
 comment on table public.monitor_alerts is
-  'Dedupe cảnh báo MẤT theo signal_id để không gửi trùng Telegram.';
+  'Dedupe cảnh báo MẤT theo signal_id để không gửi trùng Telegram (RLS enabled, service_role only).';
+
+-- Kiểm chứng sau khi chạy (cả 2 dòng phải trả về rowsecurity = true):
+-- select tablename, rowsecurity from pg_tables
+-- where schemaname = 'public'
+--   and tablename in ('delivery_receipts', 'monitor_alerts');

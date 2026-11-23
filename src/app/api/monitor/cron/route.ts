@@ -1,17 +1,41 @@
+import { timingSafeEqual } from "crypto";
 import { NextResponse } from "next/server";
 import { runMonitorPipeline } from "@/lib/monitor/engine";
 
 export const dynamic = "force-dynamic";
 
-// Vercel Cron endpoint — chạy mỗi 15 phút (vercel.json: every 15 minutes)
-// Khớp nhịp collector-15m của Trade.2026, quét cửa sổ 24h gần nhất.
+function safeEqual(a: string, b: string): boolean {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
+}
+
+function isCronAuthorized(request: Request): boolean {
+  const allowedSecrets = [
+    process.env.MONITOR_SECRET?.trim(),
+    process.env.CRON_SECRET?.trim(),
+  ].filter((s): s is string => Boolean(s));
+
+  if (allowedSecrets.length === 0) return false;
+
+  const authHeader = request.headers.get("authorization");
+  const bearer = authHeader?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+  const headerSecret = request.headers.get("x-monitor-secret")?.trim();
+  const got = bearer || headerSecret;
+
+  if (!got) return false;
+  return allowedSecrets.some((secret) => safeEqual(got, secret));
+}
+
+// Vercel Cron endpoint — chạy hằng ngày trên Hobby (00:00 UTC = 07:00 VN)
+// hoặc được kích hoạt mỗi 15 phút từ GitHub Actions kèm Authorization: Bearer $MONITOR_SECRET.
 export async function GET(request: Request) {
-  const cronSecret = process.env.CRON_SECRET?.trim();
-  if (cronSecret) {
-    const authHeader = request.headers.get("authorization");
-    if (authHeader !== `Bearer ${cronSecret}`) {
-      return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
-    }
+  if (!isCronAuthorized(request)) {
+    return NextResponse.json(
+      { ok: false, error: "unauthorized" },
+      { status: 401 },
+    );
   }
 
   const now = new Date();
@@ -28,7 +52,7 @@ export async function GET(request: Request) {
 
   return NextResponse.json({
     ok: true,
-    triggeredBy: "vercel-cron",
+    triggeredBy: "cron",
     isMorningDigestWindow,
     runId: report.runId,
     mode: report.mode,

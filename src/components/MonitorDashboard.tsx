@@ -29,6 +29,7 @@ interface EnvStatus {
   telegramConfigured: boolean;
   vpsHeartbeatConfigured: boolean;
   cronSecretConfigured: boolean;
+  monitorSecretConfigured: boolean;
   mode: "live" | "demo";
   supabaseHost: string;
 }
@@ -78,7 +79,8 @@ const VERDICT_META: Record<
   },
 };
 
-const P0_SQL_SNIPPET = `create table if not exists public.delivery_receipts (
+const P0_SQL_SNIPPET = `-- CHỈ chạy trong project almond-fence (fagveiomuwuyuzzeepvk)
+create table if not exists public.delivery_receipts (
   signal_id text primary key,
   sent_at timestamptz,
   relay_response jsonb,
@@ -93,7 +95,11 @@ create table if not exists public.monitor_alerts (
   alerted_at timestamptz not null default now(),
   telegram_message_id text,
   evidence jsonb
-);`;
+);
+
+-- Bật RLS (KHÔNG tạo policy public nào — chỉ service_role bypass RLS)
+alter table public.delivery_receipts enable row level security;
+alter table public.monitor_alerts enable row level security;`;
 
 export function MonitorDashboard() {
   const [envStatus, setEnvStatus] = useState<EnvStatus | null>(null);
@@ -114,6 +120,7 @@ export function MonitorDashboard() {
   );
   const [windowHours, setWindowHours] = useState<number>(24);
   const [sendTelegram, setSendTelegram] = useState<boolean>(false);
+  const [monitorSecret, setMonitorSecret] = useState<string>("");
   const [verdictFilter, setVerdictFilter] = useState<FinalVerdict | "ALL">(
     "ALL",
   );
@@ -143,8 +150,24 @@ export function MonitorDashboard() {
   }, []);
 
   useEffect(() => {
+    try {
+      const saved = sessionStorage.getItem("trade2026_monitor_secret");
+      if (saved) setMonitorSecret(saved);
+    } catch {
+      // ignore storage errors
+    }
     void loadStatus();
   }, [loadStatus]);
+
+  const handleSecretChange = (val: string) => {
+    setMonitorSecret(val);
+    try {
+      if (val) sessionStorage.setItem("trade2026_monitor_secret", val);
+      else sessionStorage.removeItem("trade2026_monitor_secret");
+    } catch {
+      // ignore storage errors
+    }
+  };
 
   const triggerRun = async (overrides?: {
     mode?: "auto" | "live" | "demo";
@@ -154,9 +177,15 @@ export function MonitorDashboard() {
     setRunning(true);
     setError(null);
     try {
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (monitorSecret.trim()) {
+        headers["x-monitor-secret"] = monitorSecret.trim();
+      }
       const res = await fetch("/api/monitor/run", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           mode: overrides?.mode ?? selectedMode,
           scenario: overrides?.scenario ?? selectedScenario,
@@ -165,6 +194,11 @@ export function MonitorDashboard() {
         }),
       });
       const data = await res.json();
+      if (res.status === 401) {
+        throw new Error(
+          "401 Unauthorized — Nhập đúng MONITOR_SECRET vào ô khóa bên dưới (khớp biến MONITOR_SECRET trên Vercel) để chạy quét.",
+        );
+      }
       if (!res.ok || !data.ok) {
         throw new Error(data.error || `HTTP ${res.status}`);
       }
@@ -382,6 +416,20 @@ export function MonitorDashboard() {
               <span className="text-slate-300">
                 Gửi Telegram thật nếu có MẤT mới
               </span>
+            </label>
+
+            <label className="flex items-center gap-2">
+              <span className="font-mono text-[11px] text-slate-400 uppercase">
+                Secret:
+              </span>
+              <input
+                type="password"
+                value={monitorSecret}
+                onChange={(e) => handleSecretChange(e.target.value)}
+                placeholder="MONITOR_SECRET..."
+                autoComplete="off"
+                className="w-36 rounded border border-slate-700 bg-slate-950 px-2 py-1 font-mono text-xs text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none"
+              />
             </label>
           </div>
 
@@ -896,9 +944,14 @@ export function MonitorDashboard() {
                           detail="Nguồn xác minh thứ 2 độc lập (telegram-sender sent_ids)"
                         />
                         <EnvRow
+                          name="MONITOR_SECRET"
+                          ok={Boolean(envStatus?.monitorSecretConfigured)}
+                          detail="Bắt buộc cho POST /api/monitor/run & GitHub Actions cron (Bearer / x-monitor-secret)"
+                        />
+                        <EnvRow
                           name="CRON_SECRET"
                           ok={Boolean(envStatus?.cronSecretConfigured)}
-                          detail="Bảo vệ endpoint /api/monitor/cron (chạy mỗi 15 phút)"
+                          detail="Tùy chọn bổ sung cho Vercel Cron hằng ngày /api/monitor/cron"
                         />
                       </ul>
                     </div>

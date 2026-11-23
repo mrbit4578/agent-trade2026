@@ -14,6 +14,7 @@ export async function GET() {
   const telegramConfigured = Boolean(getTelegramConfig());
   const vpsHeartbeatConfigured = Boolean(process.env.VPS_HEARTBEAT_URL?.trim());
   const cronSecretConfigured = Boolean(process.env.CRON_SECRET?.trim());
+  const monitorSecretConfigured = Boolean(process.env.MONITOR_SECRET?.trim());
 
   let report = getLastReport();
   if (!report) {
@@ -32,6 +33,7 @@ export async function GET() {
       telegramConfigured,
       vpsHeartbeatConfigured,
       cronSecretConfigured,
+      monitorSecretConfigured,
       mode: supabaseConfigured ? "live" : "demo",
       supabaseHost: process.env.SUPABASE_URL
         ? new URL(process.env.SUPABASE_URL).host

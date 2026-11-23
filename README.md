@@ -22,10 +22,11 @@ Web Agent giám sát luồng tín hiệu Trade.2026 đầu–cuối chạy live 
 Thêm các biến môi trường trong **Vercel → Project Settings → Environment Variables**:
 
 - `SUPABASE_URL` (mặc định `https://fagveiomuwuyuzzeepvk.supabase.co`)
-- `SUPABASE_API_KEY` (auth chỉ header `apikey`)
-- `TELEGRAM_BOT_TOKEN` & `TELEGRAM_CHAT_ID`
+- `SUPABASE_SERVICE_KEY` (hoặc `SUPABASE_API_KEY`, auth chỉ header `apikey`)
+- `BOT_TOKEN_TRADEMRBIT` & `SIGNAL_CHAT_ID` (hoặc `TELEGRAM_BOT_TOKEN` & `TELEGRAM_CHAT_ID`)
+- `MONITOR_SECRET` (**bắt buộc** — bảo vệ `POST /api/monitor/run` và `GET /api/monitor/cron`, đặt cùng giá trị trên GitHub Actions Secret)
 - `VPS_HEARTBEAT_URL` (tùy chọn — nguồn xác minh độc lập thứ 2)
-- `CRON_SECRET` (bảo vệ `/api/monitor/cron`)
+- `CRON_SECRET` (tùy chọn bổ sung cho Vercel Cron hằng ngày)
 
 > Khi chưa gắn `SUPABASE_API_KEY`, web tự chạy ở chế độ **DEMO SANDBOX** (kèm sẵn kịch bản kiểm thử chấp nhận `10/11/2026 UTC · LINK-short-1794327319494` và `Ngày sạch`).
 

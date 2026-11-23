@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "crypto";
 import { NextResponse } from "next/server";
 import { runMonitorPipeline } from "@/lib/monitor/engine";
 import type { DemoScenarioId, MonitorRunOptions } from "@/lib/monitor/types";
@@ -10,7 +11,34 @@ const ALLOWED_SCENARIOS = new Set<DemoScenarioId>([
   "clean-day",
 ]);
 
+function safeEqual(a: string, b: string): boolean {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
+}
+
+function isAuthorized(request: Request): boolean {
+  const secret = process.env.MONITOR_SECRET?.trim();
+  if (!secret) return false;
+
+  const authHeader = request.headers.get("authorization");
+  const bearer = authHeader?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+  const headerSecret = request.headers.get("x-monitor-secret")?.trim();
+  const got = bearer || headerSecret;
+
+  if (!got) return false;
+  return safeEqual(got, secret);
+}
+
 export async function POST(request: Request) {
+  if (!isAuthorized(request)) {
+    return NextResponse.json(
+      { ok: false, error: "unauthorized" },
+      { status: 401 },
+    );
+  }
+
   try {
     const body = (await request.json().catch(() => ({}))) as Partial<MonitorRunOptions>;
 
@@ -33,8 +61,12 @@ export async function POST(request: Request) {
           : "auto",
       scenario,
       windowHours,
-      fromUtc: typeof body.fromUtc === "string" && body.fromUtc ? body.fromUtc : undefined,
-      toUtc: typeof body.toUtc === "string" && body.toUtc ? body.toUtc : undefined,
+      fromUtc:
+        typeof body.fromUtc === "string" && body.fromUtc
+          ? body.fromUtc
+          : undefined,
+      toUtc:
+        typeof body.toUtc === "string" && body.toUtc ? body.toUtc : undefined,
       sendTelegram: Boolean(body.sendTelegram),
       includeDailyDigest: Boolean(body.includeDailyDigest),
     });
@@ -44,7 +76,8 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         ok: false,
-        error: err instanceof Error ? err.message : "Lỗi chạy pipeline giám sát",
+        error:
+          err instanceof Error ? err.message : "Lỗi chạy pipeline giám sát",
       },
       { status: 500 },
     );
