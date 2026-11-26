@@ -106,6 +106,11 @@ create table if not exists public.monitor_alerts (
 alter table public.delivery_receipts enable row level security;
 alter table public.monitor_alerts enable row level security;`;
 
+function fmtPrice(v: number | null | undefined): string {
+  if (v === null || v === undefined) return "—";
+  return v.toLocaleString("en-US", { maximumFractionDigits: 4 });
+}
+
 export function MonitorDashboard() {
   const [envStatus, setEnvStatus] = useState<EnvStatus | null>(null);
   const [report, setReport] = useState<MonitorReport | null>(null);
@@ -135,6 +140,10 @@ export function MonitorDashboard() {
   >("audit");
   const [mainView, setMainView] = useState<"dashboard" | "flow">("dashboard");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  // Giá hiện tại live theo coin (OKX public ticker, không cần key).
+  const [livePrices, setLivePrices] = useState<Record<string, number | null>>(
+    {},
+  );
 
   const loadStatus = useCallback(async () => {
     setLoading(true);
@@ -168,6 +177,42 @@ export function MonitorDashboard() {
     }
     void loadStatus();
   }, [loadStatus]);
+
+  // Giá hiện tại live (OKX public ticker, không cần key) — chỉ hiển thị, không đặt lệnh.
+  // Coin không có trên OKX (vd mã cổ phiếu) thì fetch lỗi và hiện "—".
+  useEffect(() => {
+    if (!report) return;
+    const coins = Array.from(
+      new Set(report.items.map((i) => i.signal.coin)),
+    ).filter(Boolean);
+    if (coins.length === 0) return;
+    let stopped = false;
+    const fetchPrices = async () => {
+      const entries = await Promise.all(
+        coins.map(async (coin) => {
+          try {
+            const res = await fetch(
+              `https://www.okx.com/api/v5/market/ticker?instId=${coin}-USDT`,
+            );
+            const data = await res.json();
+            const last = data?.data?.[0]?.last;
+            const n =
+              last === undefined || last === null ? null : Number(last);
+            return [coin, Number.isFinite(n) ? n : null] as const;
+          } catch {
+            return [coin, null] as const;
+          }
+        }),
+      );
+      if (!stopped) setLivePrices(Object.fromEntries(entries));
+    };
+    void fetchPrices();
+    const timer = setInterval(() => void fetchPrices(), 20000);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [report]);
 
   const switchMainView = (next: "dashboard" | "flow") => {
     setMainView(next);
@@ -695,6 +740,10 @@ export function MonitorDashboard() {
                             <th className="px-3 py-2.5">Điểm</th>
                             <th className="px-3 py-2.5">Phase / Loại</th>
                             <th className="px-3 py-2.5">ts_vao (giờ VN)</th>
+                            <th className="px-3 py-2.5">Vào lệnh tối ưu</th>
+                            <th className="px-3 py-2.5">Giá hiện tại (live)</th>
+                            <th className="px-3 py-2.5">Chốt lời (tư vấn)</th>
+                            <th className="px-3 py-2.5">Cắt lỗ</th>
                             <th className="px-3 py-2.5">Receipt</th>
                             <th className="px-3 py-2.5">Heartbeat</th>
                             <th className="px-3 py-2.5">Độ trễ</th>
@@ -746,6 +795,38 @@ export function MonitorDashboard() {
                                   <td className="px-3 py-2.5 font-mono text-[11px] text-slate-300 tabular-nums">
                                     {formatVn(item.signal.ts_vao)}
                                   </td>
+                                  <td className="px-3 py-2.5 font-mono text-[11px] font-semibold text-slate-100 tabular-nums">
+                                    {fmtPrice(item.signal.gia_vao)}
+                                  </td>
+                                  <td className="px-3 py-2.5 font-mono text-[11px] tabular-nums">
+                                    {item.signal.coin in livePrices ? (
+                                      livePrices[item.signal.coin] === null ? (
+                                        <span className="text-slate-500">—</span>
+                                      ) : (
+                                        <span className="font-semibold text-cyan-300">
+                                          {fmtPrice(
+                                            livePrices[item.signal.coin],
+                                          )}
+                                        </span>
+                                      )
+                                    ) : (
+                                      <span className="text-slate-500">…</span>
+                                    )}
+                                  </td>
+                                  <td className="px-3 py-2.5 font-mono text-[11px] text-emerald-300 tabular-nums">
+                                    {item.signal.tp1 === null &&
+                                    item.signal.tp2 === null
+                                      ? "—"
+                                      : [item.signal.tp1, item.signal.tp2]
+                                          .filter(
+                                            (v): v is number => v !== null,
+                                          )
+                                          .map((v) => fmtPrice(v))
+                                          .join(" / ")}
+                                  </td>
+                                  <td className="px-3 py-2.5 font-mono text-[11px] text-rose-300 tabular-nums">
+                                    {fmtPrice(item.signal.sl)}
+                                  </td>
                                   <td className="px-3 py-2.5 font-mono text-[11px]">
                                     {item.receipt ? (
                                       <span
@@ -794,7 +875,7 @@ export function MonitorDashboard() {
                                     key={`${item.signal.id}-detail`}
                                     className="bg-slate-950/80"
                                   >
-                                    <td colSpan={9} className="px-4 py-3">
+                                    <td colSpan={13} className="px-4 py-3">
                                       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                                         <div className="rounded border border-slate-800 bg-[#0b1120] p-3">
                                           <p className="font-mono text-[11px] font-semibold text-cyan-400 uppercase">
