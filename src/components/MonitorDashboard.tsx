@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { FlowErrorBoundary } from "@/components/FlowErrorBoundary";
 import { LiveFlowView } from "@/components/LiveFlowView";
+import { formatVn } from "@/lib/monitor/time";
 import type {
   AuditItem,
   DemoScenarioId,
@@ -693,7 +694,7 @@ export function MonitorDashboard() {
                             <th className="px-3 py-2.5">Coin / Side</th>
                             <th className="px-3 py-2.5">Điểm</th>
                             <th className="px-3 py-2.5">Phase / Loại</th>
-                            <th className="px-3 py-2.5">ts_vao (UTC)</th>
+                            <th className="px-3 py-2.5">ts_vao (giờ VN)</th>
                             <th className="px-3 py-2.5">Receipt</th>
                             <th className="px-3 py-2.5">Heartbeat</th>
                             <th className="px-3 py-2.5">Độ trễ</th>
@@ -743,11 +744,7 @@ export function MonitorDashboard() {
                                     </span>
                                   </td>
                                   <td className="px-3 py-2.5 font-mono text-[11px] text-slate-300 tabular-nums">
-                                    {item.signal.ts_vao
-                                      ? item.signal.ts_vao
-                                          .replace("T", " ")
-                                          .replace(".000Z", "Z")
-                                      : "chưa có dữ liệu"}
+                                    {formatVn(item.signal.ts_vao)}
                                   </td>
                                   <td className="px-3 py-2.5 font-mono text-[11px]">
                                     {item.receipt ? (

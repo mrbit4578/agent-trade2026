@@ -251,8 +251,8 @@ function runChot(
         : entry.receipt === null
           ? "Không có biên nhận trong delivery_receipts"
           : entry.receipt.status === "failed"
-            ? `Có biên nhận trạng thái FAILED lúc ${formatUtc(entry.receipt.checked_at)}`
-            : `Biên nhận ${entry.receipt.status.toUpperCase()} lúc ${formatUtc(entry.receipt.sent_at || entry.receipt.checked_at)}${entry.receipt.telegram_message_id ? ` (msg ${entry.receipt.telegram_message_id})` : ""}`,
+            ? `Có biên nhận trạng thái FAILED lúc ${formatVn(entry.receipt.checked_at)}`
+            : `Biên nhận ${entry.receipt.status.toUpperCase()} lúc ${formatVn(entry.receipt.sent_at || entry.receipt.checked_at)}${entry.receipt.telegram_message_id ? ` (msg ${entry.receipt.telegram_message_id})` : ""}`,
       capturedAtUtc: receiptsCapturedAtUtc,
     };
 
@@ -263,8 +263,8 @@ function runChot(
       detail: !heartbeat.available
         ? heartbeat.note
         : entry.inHeartbeat
-          ? `Có signal_id trong sent_ids của heartbeat (chạy gần nhất ${formatUtc(heartbeat.lastRunAtUtc)})`
-          : `Vắng mặt trong sent_ids của heartbeat (chạy gần nhất ${formatUtc(heartbeat.lastRunAtUtc)})`,
+          ? `Có signal_id trong sent_ids của heartbeat (chạy gần nhất ${formatVn(heartbeat.lastRunAtUtc)})`
+          : `Vắng mặt trong sent_ids của heartbeat (chạy gần nhất ${formatVn(heartbeat.lastRunAtUtc)})`,
       capturedAtUtc: heartbeat.checkedAtUtc,
     };
 
@@ -401,7 +401,7 @@ export async function runMonitorPipeline(
       options.fromUtc ||
       new Date(new Date(windowToUtc).getTime() - windowHours * 3600 * 1000).toISOString();
     windowLabel = options.fromUtc
-      ? `Khung tùy chỉnh ${formatUtc(windowFromUtc)} → ${formatUtc(windowToUtc)}`
+      ? `Khung tùy chỉnh ${formatVn(windowFromUtc)} → ${formatVn(windowToUtc)}`
       : `Cửa sổ ${windowHours}h gần nhất (Live Supabase)`;
 
     const sigRes = await fetchSupabaseSignals(
